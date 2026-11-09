@@ -148,9 +148,17 @@ Card map (start of the card on the left):
 - **The card map** shows *why*: the post-format footage sits at the start, and
   whatever is to its right survived.
 
-**If December doesn't appear**, the GoPro's clock may have been wrong (it
-resets if the battery is out for a while). Look for a burst of files on one
-unexpected day, or under "no date", and scan again with that range.
+**Sanity check:** the hiking photos and videos were recorded on your HERO5
+after the format, so they are genuine, undamaged files from your camera. They
+should all be reported intact. Videos are labelled with GoPro's firmware
+version, which starts with `HD5` for a HERO5. If they come back intact, the
+tool is handling your camera's files correctly.
+
+**If December doesn't appear**, the GoPro's clock may have been wrong. It
+resets if the battery is out for a while, and then the camera stamps files
+**2016-01-01**: one of GoPro's own published sample clips carries exactly
+that date. Look for a burst of files on one unexpected day (2016 especially),
+or under "no date", and scan again with that range.
 
 ## Step 4: Recover with cardscan
 
@@ -282,6 +290,22 @@ in 4 pieces):
 That's why the procedure runs both tools, and why PhotoRec's brute-force mode
 matters.
 
+**Genuine GoPro files.** GoPro publishes sample clips straight off its
+cameras, and ExifTool's test suite includes a real GoPro photo's metadata.
+`tests/test_real_gopro.py` downloads them, pinned to exact versions and
+checksums:
+
+- All three cameras (HERO5, HERO6, HERO7) write the index **last**
+  (`ftyp` → `mdat` → `moov`), which is what makes rebuilding a video's end
+  possible.
+- Deep scan verifies every frame of each intact clip, with no false alarms.
+- With the start of the HERO5 clip overwritten (25%, 50%, 90%), cardscan
+  found the original start to the byte. Every rebuilt clip decodes with zero
+  errors, and **every recovered frame is pixel-identical to the original**
+  (frame checksums from ffmpeg).
+- The real GoPro photo's big-endian EXIF parses correctly: camera, model and
+  the moment it was taken.
+
 ## How cardscan works (short version)
 
 ```
@@ -307,11 +331,12 @@ and verify every remaining frame, and writes them into a new playable file.
 ## Testing it yourself
 
 ```sh
-python3 -m unittest discover -s tests -t .       # 37 tests; stdlib only
+python3 -m unittest discover -s tests -t .       # 41 tests; stdlib only
 ```
 
-Some tests need `dosfstools` + `mtools` (the simulated card) or `ffmpeg` (real
-H.264 video) and skip themselves if those aren't installed. To replay the whole
+Some tests need `dosfstools` + `mtools` (the simulated card), `ffmpeg` (real
+H.264 video), or internet access (the genuine GoPro samples), and skip
+themselves if those aren't available. To replay the whole
 story and look at the results:
 
 ```sh

@@ -201,11 +201,23 @@ original file*. From that, `cardscan/salvage.py`:
    just what survived. The original creation date and GoPro firmware tag are
    kept.
 
-Tested on real H.264 video with its first 40% overwritten: cardscan found the
-exact original start, identified frame 242 as the first intact frame, and
-began at keyframe 255. That recovered 11.5 of 20 seconds with sound, and
-ffmpeg decoded every frame without a single error. PhotoRec and similar
-carvers can't do this, because they need a file's beginning.
+Tested two ways:
+
+- **GoPro's own HERO5 sample clip** (from GoPro's gpmf-parser repository).
+  Its layout is exactly `ftyp` → `mdat` → `moov`, and the HERO6 and HERO7
+  samples are the same. It holds H.264 video with 4-byte length prefixes and a
+  keyframe every 8 frames, plus audio, a timecode track and two GoPro metadata
+  tracks. With the first 25%, 50% or 90% overwritten, cardscan found the
+  original start to the byte. ffmpeg decoded each rebuilt clip with zero
+  errors, and every one of the 821, 613, 405 and 77 recovered frames (at the
+  first-kilobyte, 25%, 50% and 90% depths) decoded to a picture
+  **pixel-identical** to the original's.
+- **A 20-second ffmpeg-made video** with its first 40% overwritten: frame 242
+  was the first intact frame, playback began at keyframe 255, and 11.5 of 20
+  seconds came back with sound.
+
+PhotoRec and similar carvers can't do this, because they need a file's
+beginning.
 
 ## 5. Limits worth knowing
 
@@ -243,8 +255,9 @@ carvers can't do this, because they need a file's beginning.
   but if one did, the old area reads back as blank. cardscan's map would show
   "nothing recognised" everywhere except the new files.
 - **Camera clock.** Dates come from the camera's clock. If it was ever reset,
-  the photos carry the wrong date, so look for a burst of photos on an
-  unexpected day.
+  the files carry the wrong date. GoPros fall back to 2016-01-01; one of
+  GoPro's own published HERO7 sample clips is dated exactly that. Look for a
+  burst of files on an unexpected day.
 
 ## 6. Why the safety steps matter
 
