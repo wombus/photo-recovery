@@ -1,0 +1,13 @@
+# Card images and anything recovered from them: personal data, and huge.
+*.img
+*.dd
+*.map
+scan-results/
+recovered/
+recup_dir*/
+photorec.log
+__pycache__/
+*.pyc
+photorec.*/
+recup.*/
+tests/.samples/
