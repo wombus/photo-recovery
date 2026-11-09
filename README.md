@@ -1,277 +1,321 @@
 # photo-recovery
 
-Getting back photos and videos from a GoPro SD card after everything on it was
-deleted and new footage was recorded on top.
+Getting back photos and videos from a GoPro SD card that was **formatted in
+the camera** and then had new footage recorded on top. The procedure aims to
+be as thorough as possible, with speed a secondary concern.
 
-This repo has two things:
+What's here:
 
-1. **This guide**: what to do, in order, starting with what to do *right now*.
-2. **`cardscan`**: a small, dependency-free Python tool that scans a copy of
-   the card, tells you whether anything from the dates you care about survived
-   and where it sits on the card, and pulls those files out. It never writes to
-   the card.
+1. **This guide**: the steps in order, starting with what to do *right now*.
+2. **`cardscan`**: a dependency-free Python tool that reads a copy of the card,
+   tells you what survived from the dates you care about and where it sits, and
+   recovers it. That includes rebuilding videos whose *beginning* was
+   overwritten, which other tools can't do. It never writes to the card.
+3. **PhotoRec**, the free, long-established recovery tool, set to its most
+   thorough mode. It can stitch together photos that were split into pieces
+   across the card, which cardscan can't.
 
-It works alongside **PhotoRec**, the free, long-established recovery tool. Use
-both: they work differently, so if one misses something the other may catch it.
+Use **both**. Each recovers things the other misses (see the
+[evidence](#what-each-tool-recovered-in-testing)).
 
-> **Why there is real hope:** when a camera "deletes all" or formats a card,
-> it wipes the card's *table of contents*, not the photos. The photo data stays
-> exactly where it was until something new is written over that exact spot. New
-> footage is usually written from the start of the card onward, so anything that
-> sat further in can survive untouched. The [full explanation](docs/how-it-works.md)
-> walks through why.
+> **Why there is real hope:** formatting in a camera is a *quick format*. It
+> writes a new, empty table of contents and leaves every photo where it was.
+> A photo is only lost where new footage was written over that exact spot, and
+> a camera writes new footage from the start of the card onward. Anything
+> further in can survive untouched.
+> [docs/how-it-works.md](docs/how-it-works.md) explains why, step by step.
 
 ---
 
-## Step 0: Protect the card (do this now)
+## Step 0: Protect the card (now)
 
-Every new write can destroy something that is still recoverable.
-
-- **Don't put the card back in the GoPro**, don't record on it, and don't
-  format it. Turning the camera on with the card inserted can write to it.
+- **Stop using it.** Don't put it back in the GoPro (turning the camera on can
+  write to it), don't record on it, and don't format it again.
 - **Lock it before plugging it into a computer.** Put the microSD card in a
-  full-size SD adapter and slide the adapter's little lock tab to **LOCK**.
-  Your computer will then treat the card as read-only.
-  - *Why:* computers quietly write small hidden files to cards when they mount
-    them (macOS writes `.Spotlight-V100`/`.fseventsd`, Windows can write
-    `System Volume Information`). On a FAT/exFAT card those writes land in the
-    next free space, which is right next to the newest files. That is exactly
-    where old data is most likely to have survived.
-- If your computer offers to **"format"** or **"repair"** the card, click
-  **Cancel**.
-- Keep the hiking footage too. The image you make in Step 2 captures it along
-  with everything else.
+  full-size SD adapter and slide the adapter's lock tab to **LOCK**.
+  Computers write small hidden files to cards they mount (macOS:
+  `.Spotlight-V100`, `.fseventsd`; Windows: `System Volume Information`). Those
+  writes land right after the newest files, which is exactly where old data is
+  most likely to have survived.
+- If the computer offers to **format** or **repair** the card: **Cancel**.
+- **Plug it in as few times as possible.** Make one copy (Step 2), then put the
+  card away unplugged. Flash memory can tidy itself up in the background while
+  powered, which matters only for the long-shot lab option in Step 7.
 
-## Step 1: Check the easy places first (about 15 minutes)
+## Step 1: Check for other copies (about 15 minutes)
 
-Recovery from the card is a backstop. Copies are often already somewhere else:
+These are often where photos turn up, so don't skip this step.
 
-- **GoPro cloud**: if you ever had a GoPro subscription (GoPro Plus), the
-  HERO5 Black can auto-upload while charging. Sign in at gopro.com → Media
-  Library and look at December 2025.
-- **GoPro Quik app on your phone**: if you ever previewed or downloaded the
-  shoot over Wi-Fi, check the app's media and your phone's photo library
-  (often an album named *GoPro*), plus iCloud Photos or Google Photos backups.
+- **GoPro cloud**: with a GoPro subscription, a HERO5 Black can auto-upload
+  while charging. Check gopro.com → Media Library around December 2025.
+- **GoPro Quik app** on your phone: check its media library and your phone's
+  photos (often an album named *GoPro*), plus iCloud Photos or Google Photos
+  backups. If you ever previewed the card over Wi-Fi, the app may also have
+  cached previews.
 - **Your computers**: search for `GOPR*` and `G00*` (GoPro's file names), and
-  look in the Photos/Lightroom/Google Photos libraries around December 2025.
-- **Other people**: anyone at the shoot may have taken phone photos. Also check
-  photos you *sent* to someone by text, email, or social media. Those copies
-  are smaller, but they are real.
+  check Photos/Lightroom/Google Photos libraries for December 2025.
+- **Other people and messages**: phones of anyone at the shoot, and photos you
+  sent by text, email or social media.
 
-## Step 2: Make a copy (an "image") of the whole card
+## Step 2: Make a complete copy ("image") of the card
 
-You scan and recover from the image, never from the card. You need free disk
-space at least as big as the card, e.g. 64 GB for a 64 GB card.
+All recovery works from the image, never the card. You need free space at
+least the size of the card, e.g. 64 GB for a 64 GB card.
 
-*Why an image:* every tool then works on a copy, so nothing can make things
-worse. You can also try as many tools as you like, as many times as you like,
-and put the card away somewhere safe.
+Use **ddrescue**. Unlike a plain copy, it retries unreadable spots, keeps a
+log so it can resume, and tells you if anything couldn't be read.
 
-**macOS**
+**macOS** (install it first with `brew install ddrescue`):
 
 ```sh
-diskutil list                      # find the card, e.g. /dev/disk4. CHECK THE SIZE matches the card
+diskutil list                         # find the card, e.g. /dev/disk4. CHECK THE SIZE matches the card
 diskutil unmountDisk /dev/disk4
-brew install ddrescue              # best option: copes with flaky cards and can resume
-sudo ddrescue /dev/rdisk4 ~/tinkerbell-card.img ~/tinkerbell-card.map
-# or, without Homebrew (press Ctrl+T to see progress):
-sudo dd if=/dev/rdisk4 of=~/tinkerbell-card.img bs=4m
+sudo ddrescue -r3 /dev/rdisk4 ~/tinkerbell-card.img ~/tinkerbell-card.map
 ```
 
-**Linux**
+**Linux** (`sudo apt install gddrescue`):
 
 ```sh
-lsblk                              # find the card, e.g. /dev/sdb (the whole card, not sdb1)
-sudo ddrescue /dev/sdb ~/tinkerbell-card.img ~/tinkerbell-card.map
+lsblk                                 # find the card, e.g. /dev/sdb (the whole card, not sdb1)
+sudo ddrescue -d -r3 /dev/sdb ~/tinkerbell-card.img ~/tinkerbell-card.map
 ```
 
-**Windows**: install **Win32 Disk Imager**, choose the card's drive letter,
-type a file name like `C:\recovery\tinkerbell-card.img`, make sure *Read Only
-Allocated Partitions* is **unticked**, and click **Read**. (If imaging is a
-hassle on Windows, you can point PhotoRec straight at the card in Step 4. It
-only reads.)
+**Windows**: install **Win32 Disk Imager**, pick the card's drive letter and a
+file such as `C:\recovery\tinkerbell-card.img`, make sure *Read Only Allocated
+Partitions* is **unticked**, and click **Read**.
 
-Check that the image is about the size of the card (a "64 GB" card gives
-roughly 63-64 GB). Then put the card somewhere safe.
+When ddrescue finishes, its summary should say **rescued: 100%** and **bad
+areas: 0**. If it doesn't, run the same command again: it resumes and retries
+only what's missing. Check that the image is about the card's size, keep a
+second copy of it on another drive, and put the card away.
 
-## Step 3: Find out what survived, with `cardscan`
+## Step 3: Deep scan with cardscan
 
-You need Python 3.9 or newer. Nothing else is required.
+Needs Python 3.9+, nothing else.
 
 ```sh
 git clone https://github.com/wombus/photo-recovery.git
 cd photo-recovery
-python3 -m cardscan scan ~/tinkerbell-card.img --from 2025-12-01 --to 2025-12-31
+python3 -m cardscan scan ~/tinkerbell-card.img --deep --from 2025-12-01 --to 2025-12-31
 ```
 
-(On Windows use `py -m cardscan scan C:\recovery\tinkerbell-card.img ...`.)
+(Windows: `py -m cardscan scan C:\recovery\tinkerbell-card.img --deep ...`)
 
-It reads the whole image front to back. Expect a few minutes for 64 GB from
-an SSD. It reports every photo and video it can recognise, using the date the
-camera stamped inside each file, and a map of where things physically sit.
-Here is the output from a simulated card that went through the same history
-as yours (see [Testing](#testing-it-yourself)). The `◀` notes are mine, not
-part of the output:
+`--deep` is the most thorough mode:
+
+- It looks for pictures at **every byte**, not just at file boundaries.
+- It finds **video indexes whose video lost its beginning** and works out what
+  can be rebuilt.
+- It **checks every frame** of every video that looks intact, so a video
+  damaged in the middle isn't reported as fine.
+- It checks photos' built-in **restart markers**, which catch a photo spliced
+  together with other data.
+
+It reads the whole image. Expect minutes to an hour, depending on card size
+and disk speed.
+
+Here is the output from a simulated card with the same history as yours
+(see [Testing](#testing-it-yourself)). The `◀` notes are mine:
 
 ```
-Recognised 319 photos and 11 videos on 268.4 MB of card.
+Recognised 261 photos and 14 videos on 268.4 MB of card.
+1 of them is damaged or only partly recoverable (see the notes below and findings.csv).
 
 By the month the camera says they were taken:
   month      photos  videos  damaged
-  2025-10        58       0        0
-  2025-12        82       2        0   <-- your date range
-  2026-01       177       9        0
+  2025-12        82       3        1   <-- your date range
+  2026-01       177      11        0
   no date         2       0        0
 
-*** Found 82 photos and 2 videos from 2025-12-01 to 2025-12-31. ***
-    2025-12-14: 84 files (84 intact)
+*** Found 82 photos and 3 videos from 2025-12-01 to 2025-12-31. ***
+    2025-12-14: 85 files (84 intact)
+  Damaged or rebuilt:
+    2025-12-14T14:10:00 video: beginning overwritten; the last 3.9s of 10.0s are rebuilt from the surviving index
 
 Card map (start of the card on the left):
-  |.===========================###########===========..........|
+  |.=========================############===========...........|
    # your date range   = other recognised files   . nothing recognised
 
   where on the card            files   taken on
-        0 B - 5.2 MB         -    (nothing recognised)
-     5.2 MB - 103.1 MB       65    2026-01-21                ◀ recorded after the delete
-   103.4 MB - 126.4 MB       58    2025-10-12                ◀ partly overwritten
-   126.4 MB - 173.1 MB       85    2025-12-14   <-- your date range
-   173.1 MB - 221.6 MB      122    2026-01-18
-   221.6 MB - 268.4 MB       -    (nothing recognised)
+     5.2 MB - 119.7 MB       67    2026-01-21     ◀ recorded after the format
+   119.9 MB - 169.6 MB       86    2025-12-14   <-- your date range
+   169.6 MB - 218.1 MB      122    2026-01-18
 ```
 
-How to read it:
+- **The table** shows what's there. Everything is recorded in
+  `scan-results/findings.csv`, whatever the date filter.
+- **"Damaged or rebuilt"** explains each imperfect file in your date range.
+- **The card map** shows *why*: the post-format footage sits at the start, and
+  whatever is to its right survived.
 
-- **The by-month table** tells you what's there. "Damaged" files were partly
-  overwritten. They're still worth recovering, because most viewers show the
-  surviving part.
-- **The card map** tells you *why*. The hiking footage sits at the start of
-  the card. Whatever was underneath it is gone, and everything to its right is
-  old data that survived. In this simulation the July photos (originally at the
-  start) are gone entirely, October was half overwritten, and the December
-  shoot came back complete.
-- A full list is written to `scan-results/findings.csv`, which you can open in
-  any spreadsheet.
+**If December doesn't appear**, the GoPro's clock may have been wrong (it
+resets if the battery is out for a while). Look for a burst of files on one
+unexpected day, or under "no date", and scan again with that range.
 
-**If December doesn't show up**, look at the table before giving up. If the
-GoPro's clock was ever reset (for example after the battery was out for a
-while), the photos carry the wrong date. Look for a burst of photos on one
-unexpected day, or rows under "no date", and re-run with that date range.
+## Step 4: Recover with cardscan
 
-## Step 4: Recover the files
-
-**With cardscan** (write the output to your computer, never to the card):
+Write recovered files to your computer, never to the card.
 
 ```sh
-python3 -m cardscan extract scan-results/findings.json --from 2025-12-01 --to 2025-12-31 --out tinkerbell
+python3 -m cardscan extract scan-results/findings.json --from 2025-12-01 --to 2025-12-31 --undated --out tinkerbell
+python3 -m cardscan extract scan-results/findings.json --all --out everything   # keep everything, in case dates are off
 ```
 
-Files are named by the moment they were taken, e.g.
-`2025-12-14_140114_jpeg_at000007947400.jpg`. Add `--undated` to also get
-files with no date (video thumbnails), or use `--all` to extract everything.
+Files are named by when they were taken. Suffixes mark the special cases:
 
-**With PhotoRec as well** (free, from cgsecurity.org; the "TestDisk & PhotoRec"
-download). It recognises hundreds of formats, including the HERO5's `.GPR`
-RAW photos if you had RAW turned on, which cardscan doesn't handle.
+| suffix | what it is |
+|---|---|
+| *(none)* | intact, byte-for-byte as the camera wrote it |
+| `_PARTIAL.jpg` | a damaged photo; viewers show the part that survived |
+| `_PARTIAL_THUMB.jpg` | the small preview stored inside that damaged photo: the **whole** picture, at low resolution |
+| `_REBUILT.mp4` | a video whose beginning was overwritten; its surviving end, rebuilt into a playable file |
+| `_PARTIAL.mp4` | a video whose frames survived but whose index didn't; see Step 6 |
 
-1. Install: Windows → unzip and run `qphotorec_win.exe` as administrator;
-   macOS → `brew install testdisk`; Linux → `sudo apt install testdisk`.
-2. Run it on the image: `sudo photorec ~/tinkerbell-card.img` (or pick the
-   card in QPhotoRec).
-3. Choose the FAT32/exFAT partition. Under **File Opt** you can leave
-   everything on, or turn everything off and enable just `jpg` and `mov`
-   (`mov` covers GoPro `.mp4`).
-4. Filesystem type: **Other**. Then choose **Free**, which scans only the
-   unallocated space where deleted files live.
-5. Pick a destination folder **on your computer** and start. PhotoRec loses
-   the original file names and writes `recup_dir.1/f12345678.jpg` and so on.
-   (It also drops a `photorec.log` in the current folder; that's harmless.)
-6. Thousands of files with meaningless names are hard to search by eye. Let
-   cardscan find the December ones by the date stamped inside each file:
+## Step 5: Recover with PhotoRec in brute-force mode
 
-   ```sh
-   python3 -m cardscan sort recup_dir.* --from 2025-12-01 --to 2025-12-31 --out tinkerbell-photorec
-   ```
+Install it from cgsecurity.org ("TestDisk & PhotoRec"): on macOS
+`brew install testdisk`, on Linux `sudo apt install testdisk`, on Windows unzip
+the download and use `photorec_win.exe`.
 
-On the simulated card, both routes recovered all 84 birthday-shoot files,
-byte-for-byte identical to the originals.
+Brute-force mode is what reassembles photos that were stored in several
+pieces. It isn't on by default, and in testing the default settings recovered
+none of the fragmented photos (see [below](#what-each-tool-recovered-in-testing)).
+Use the text-mode `photorec`, which has the option (the QPhotoRec window may
+not):
 
-## Step 5: If a video won't play
+```sh
+sudo photorec ~/tinkerbell-card.img
+```
 
-A video has two parts: the frames and an index (`moov`) that says where each
-frame is. The camera writes the index *last*, so a video can survive without
-it. cardscan marks these `PARTIAL` with the note "moov index did not survive".
+1. Select the FAT32/exFAT partition.
+2. **[Options]**: set **Paranoid** to **Yes (Brute force enabled)** and **Keep
+   corrupted files** to **Yes**.
+3. **[File Opt]**: leave everything enabled.
+4. **[Search]**: filesystem type **[Other]**, then **[Whole]** (scan everything).
+5. Choose a destination folder **on your computer** and confirm with `C`.
 
-Such videos can often be rebuilt with **untrunc**
-(github.com/anthwlock/untrunc). It needs a healthy *reference* video: record a
-few seconds on the same HERO5, with the same resolution and frame rate, **on a
-different card**. Then run `untrunc reference.mp4 broken.mp4`.
+Or, as one command (the leading `1` is the partition number PhotoRec lists):
 
-GoPro also records a low-resolution copy of every video (`.LRV`, about
-848×480). It shows up as a separate smaller video and can survive when the
-full-size one didn't.
+```sh
+sudo photorec /log /d ~/recovery/photorec /cmd ~/tinkerbell-card.img 1,options,paranoid_bf,keep_corrupted_file,fileopt,everything,enable,wholespace,search
+```
 
-## If nothing turns up
+Brute force can take hours on a large card. That's expected.
 
-Be clear-eyed about what the map says:
+PhotoRec loses the original names: it writes folders of files like
+`f12345678.jpg`, named `photorec.1`, `photorec.2`, … with the command above
+(`recup_dir.1`, … from the menus). Have cardscan pick out December by the date
+stamped inside each file, into the same folder as Step 4. Files you already
+have from cardscan are skipped:
 
-- **Old months visible, December not**: December was most likely in the area
-  the hiking footage overwrote. Overwritten data cannot be recovered by any
-  software or lab.
-- **Only the hiking footage, and "nothing recognised" everywhere else**: the
-  delete may have actually erased the card. (SD cards support an erase
-  command, and some formatting tools use it.) That data is gone too.
-- **Professional recovery labs** help when a card is *physically* failing
-  (unreadable, not detected). They can't bring back overwritten data, so be
-  wary of any lab that promises otherwise.
+```sh
+python3 -m cardscan sort ~/recovery/photorec.* --from 2025-12-01 --to 2025-12-31 --out tinkerbell
+```
 
-Step 1 matters most in these cases: it's often where the photos turn up.
+## Step 6: Videos
+
+- **`_REBUILT.mp4`**: watch it. It starts at the first complete keyframe after
+  the overwritten part, with sound.
+- **`_PARTIAL.mp4`** (frames without an index): try **untrunc**
+  (github.com/anthwlock/untrunc). It needs a healthy *reference* video: record
+  a few seconds on the same HERO5 with the same resolution and frame rate, **on
+  a different card**, then run `untrunc reference.mp4 broken.mp4`.
+- **Low-res copies**: GoPro records a small copy of every video (`.LRV`,
+  848×480) at the same time. It shows up as its own video and may survive when
+  the full-size one didn't.
+
+## Step 7: If something is still missing
+
+Be clear-eyed about what the card map shows:
+
+- **Old months to the right of the hiking footage, but no December**: December
+  was in the overwritten area. No software can read data that has been
+  overwritten.
+- **Only the hiking footage, "nothing recognised" everywhere else**: the old
+  area was erased. Same conclusion.
+
+**The long shot: a flash-memory lab.** On flash memory, "overwritten" isn't
+always physically immediate. The card's controller writes new data to fresh
+memory blocks and erases the old ones later. Specialist labs can remove or
+tap the memory chip directly ("chip-off" or "monolith" recovery, e.g. with
+PC-3000 Flash) and sometimes find older copies of data the controller hadn't
+erased yet. The data most likely to linger is what was overwritten *last*,
+i.e. just before the edge of the hiking footage. Be realistic: this is
+expensive, it destroys the card, the odds after months of use are low, and no
+honest lab will promise a result. It makes sense only if the scan shows
+December sat right at the edge of the overwritten area, and only after every
+software step. Labs *can* reliably help with a card that is physically
+failing (not detected, unreadable).
 
 ---
 
-## How the tool works (short version)
+## What each tool recovered in testing
+
+Each scenario was run on a real FAT32 filesystem and checked against SHA-256
+hashes of every original file.
+
+**Card formatted in the camera, then hiking footage recorded on top**
+(`tools/simulate_card.py --real-photos --real-videos`: 212 MB written over
+five months, then 114 MB after the format):
+
+| what | cardscan `--deep` | PhotoRec (brute force) |
+|---|---|---|
+| July photos (start of card) | 0 / 204, overwritten | same |
+| October photos | 0 / 41, overwritten | same |
+| **December photos** | **82 / 82** byte-identical, plus the video's thumbnail | 82 / 82 (missed the thumbnail) |
+| December video, chapter 1 | lost (entirely overwritten) | lost |
+| December video, chapter 2 (beginning overwritten) | **last 3.9 s of 10 s rebuilt**, plays cleanly with sound | not recovered |
+| December video, chapter 3 + low-res copy | byte-identical | byte-identical |
+| January photos (before the format) | 122 / 122 | 122 / 122 |
+| hiking footage | 67 / 67 | 66 / 67 (missed the thumbnail) |
+
+**Photos split into pieces** (card filled to the brim, every other photo
+deleted, then 12 larger December photos written into the gaps, each ending up
+in 4 pieces):
+
+| | December photos fully recovered |
+|---|---|
+| cardscan | 0 / 12 complete (all 12 found, first piece only, marked PARTIAL) |
+| PhotoRec, default settings | **0 / 12** |
+| PhotoRec, Paranoid: brute force | **11 / 12** byte-identical |
+
+That's why the procedure runs both tools, and why PhotoRec's brute-force mode
+matters.
+
+## How cardscan works (short version)
 
 ```
 cardscan/
   reader.py   read-only, sector-aligned access to an image or raw device
-  scanner.py  sweep the card for file signatures at sector boundaries
-  jpeg.py     walk JPEG segments to find where a photo ends; read EXIF date/camera
-  mp4.py      walk MP4 boxes to find where a video ends; read creation date/firmware
+  scanner.py  sweep the card for photo/video signatures and video indexes
+  jpeg.py     walk JPEG segments to find where a photo ends; EXIF date, preview,
+              restart-marker checks
+  mp4.py      walk MP4 boxes to find where a video ends; date, firmware
+  salvage.py  rebuild a video whose beginning was overwritten, from its index
   report.py   by-month table and card map
   cli.py      scan / extract / sort
 ```
 
-It ignores the (wiped) filesystem and looks at raw bytes. Every FAT32/exFAT
-file starts on a sector boundary, so at each multiple of 512 bytes it asks:
-"does a JPEG (`FF D8 FF`) or MP4 (`....ftyp`) start here?" When one does, it
-follows that file's own internal structure (segment lengths for JPEG, box
-sizes for MP4) to find where the file ends, and reads the date the camera
-stamped inside it. This technique is called *file carving*.
-[docs/how-it-works.md](docs/how-it-works.md) explains each layer in depth.
+It ignores the wiped filesystem and reads raw bytes. It recognises where
+files start (JPEG `FF D8 FF`, MP4 `....ftyp`), then follows each file's own
+structure to find where it ends. That technique is called *file carving*.
+GoPro writes each video's index (`moov`) at the *end* of the file. So when a
+video's beginning is overwritten, cardscan uses the surviving index to locate
+and verify every remaining frame, and writes them into a new playable file.
+[docs/how-it-works.md](docs/how-it-works.md) explains each piece in depth.
 
 ## Testing it yourself
 
 ```sh
-python3 -m unittest discover -s tests -t .       # 26 tests, stdlib only
+python3 -m unittest discover -s tests -t .       # 37 tests; stdlib only
 ```
 
-`tools/simulate_card.py` replays the whole story on a real FAT32 filesystem.
-It fills a card from July 2025 to January 2026, quick-formats it like the
-camera does, then records "hiking" footage on top. It writes a manifest of
-every file with its SHA-256 hash, so you can check exactly what comes back.
-It needs `dosfstools` and `mtools`; `--real-photos` needs Pillow and makes
-photos you can open:
+Some tests need `dosfstools` + `mtools` (the simulated card) or `ffmpeg` (real
+H.264 video) and skip themselves if those aren't installed. To replay the whole
+story and look at the results:
 
 ```sh
-python3 tools/simulate_card.py /tmp/sim --real-photos
-python3 -m cardscan scan /tmp/sim/card.img --from 2025-12-01 --to 2025-12-31 --out /tmp/sim/results
+python3 tools/simulate_card.py /tmp/sim --real-photos --real-videos   # needs Pillow and ffmpeg
+python3 -m cardscan scan /tmp/sim/card.img --deep --from 2025-12-01 --to 2025-12-31 --out /tmp/sim/results
+python3 -m cardscan extract /tmp/sim/results/findings.json --from 2025-12-01 --to 2025-12-31 --out /tmp/sim/recovered
 ```
-
-Of 206 MB written before the delete, and 93 MB recorded after:
-
-| session | when | recovered byte-identical |
-|---|---|---|
-| summer | 2025-07 | 0 / 204 (all overwritten) |
-| fall walk | 2025-10 | 58 / 102 |
-| **16th birthday shoot** | **2025-12-14** | **85 / 85** |
-| trip, before the delete | 2026-01-18 | 122 / 122 |
-| hiking, after the delete | 2026-01-21 | 65 / 65 |

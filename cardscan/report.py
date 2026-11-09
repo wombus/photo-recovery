@@ -39,7 +39,9 @@ def summarize(findings: list[Finding], card_size: int | None,
     out.append(f"Recognised {len(photos)} photos and {len(videos)} videos{where}.")
     broken = sum(not f.complete for f in findings)
     if broken:
-        out.append(f"{broken} of them are damaged (marked PARTIAL); the rest are intact.")
+        verb = "is" if broken == 1 else "are"
+        out.append(f"{broken} of them {verb} damaged or only partly recoverable "
+                   "(see the notes below and findings.csv).")
     out.append("")
 
     # --- by month --------------------------------------------------------
@@ -72,6 +74,13 @@ def summarize(findings: list[Finding], card_size: int | None,
             for day in sorted(by_day):
                 intact = sum(f.complete for f in hits if f.taken[:10] == day)
                 out.append(f"    {day}: {by_day[day]} files ({intact} intact)")
+            damaged = [f for f in hits if not f.complete or f.moov_at is not None]
+            if damaged:
+                out.append("  Damaged or rebuilt:")
+                for f in damaged[:40]:
+                    out.append(f"    {f.taken} {'photo' if f.kind == 'jpeg' else 'video'}: {f.note}")
+                if len(damaged) > 40:
+                    out.append(f"    ... and {len(damaged) - 40} more (see findings.csv)")
             out.append(next_step)
         else:
             out.append(f"Nothing dated {span} was recognised.")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import time
 from datetime import datetime, timedelta
 
 from . import __version__
+from . import salvage
 from .reader import BlockReader
 from .report import human, in_range, summarize, write_csv
 from .scanner import Finding, identify_file, scan
@@ -51,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("image", help="card image file (or raw device) to scan")
     s.add_argument("--out", default="scan-results", help="folder for the report (default: %(default)s)")
     _add_range(s)
+    s.add_argument("--deep", action="store_true",
+                   help="most thorough: check every byte offset, and verify every frame of every video")
     s.add_argument("--align", type=int, default=512,
                    help="only look for files starting at multiples of this many bytes (default: 512)")
     s.add_argument("--size", type=int, help="size of the device in bytes, if it can't be detected")
@@ -79,8 +83,9 @@ def _cmd_scan(args) -> int:
     lo, hi = _range(args)
     reader = BlockReader(args.image, size=args.size)
     os.makedirs(args.out, exist_ok=True)
-    print(f"Scanning {args.image} ({human(reader.size)}). This reads only; nothing is written to it.",
-          file=sys.stderr)
+    mode = "deep scan" if args.deep else "scan"
+    print(f"Starting {mode} of {args.image} ({human(reader.size)}). "
+          "This reads only; nothing is written to it.", file=sys.stderr)
 
     began = time.monotonic()
 
@@ -100,7 +105,7 @@ def _cmd_scan(args) -> int:
               file=sys.stderr, flush=True)
 
     with reader:
-        findings = list(scan(reader, align=args.align, progress=progress))
+        findings = list(scan(reader, align=args.align, deep=args.deep, progress=progress))
     if live:
         print(file=sys.stderr)
 
@@ -108,6 +113,7 @@ def _cmd_scan(args) -> int:
         "image": os.path.abspath(args.image),
         "image_size": reader.size,
         "scanned_at": datetime.now().isoformat(timespec="seconds"),
+        "deep": args.deep,
         "findings": [f.to_dict() for f in findings],
     }
     with open(os.path.join(args.out, "findings.json"), "w") as fh:
@@ -141,22 +147,36 @@ def _cmd_extract(args) -> int:
         return 1
 
     os.makedirs(args.out, exist_ok=True)
-    total = 0
+    written = total = 0
     with BlockReader(image) as reader:
         for f in chosen:
             path = os.path.join(args.out, _name(f))
-            _carve(reader, f, path)
-            total += f.size
-            print(f"  {os.path.basename(path)}  ({human(f.size)})")
-    print(f"\nWrote {len(chosen)} files ({human(total)}) to {args.out}")
+            if f.moov_at is not None:
+                if f.size == 0 or not salvage.rebuild(reader, f.moov_at, path):
+                    print(f"  (skipped a {f.duration_s or 0:.0f}s video from {f.taken or 'an unknown date'}:"
+                          f" only its index survived)")
+                    continue
+            else:
+                _carve(reader, f, path)
+            size = os.path.getsize(path)
+            written, total = written + 1, total + size
+            print(f"  {os.path.basename(path)}  ({human(size)})")
+            if f.thumb_at is not None:
+                thumb = path.rsplit(".", 1)[0] + "_THUMB.jpg"
+                with open(thumb, "wb") as out:
+                    out.write(reader.read(f.thumb_at, f.thumb_size))
+                print(f"  {os.path.basename(thumb)}  (the whole picture, small)")
+    print(f"\nWrote {written} files ({human(total)}) to {args.out}")
     if any(not f.complete for f in chosen):
-        print("Files ending in _PARTIAL were damaged; most viewers still show the part that survived.")
+        print("Files marked _PARTIAL were damaged; most viewers still show the part that survived.\n"
+              "_THUMB files are the small preview stored inside a damaged photo: the whole picture.\n"
+              "_REBUILT videos had their beginning overwritten; the surviving end was rebuilt.")
     return 0
 
 
 def _name(f: Finding) -> str:
     when = f.taken_dt.strftime("%Y-%m-%d_%H%M%S") if f.taken else "undated"
-    tag = "" if f.complete else "_PARTIAL"
+    tag = "_REBUILT" if f.moov_at is not None else ("" if f.complete else "_PARTIAL")
     return f"{when}_{f.kind}_at{f.offset:012x}{tag}.{f.ext}"
 
 
@@ -194,9 +214,29 @@ def _cmd_sort(args) -> int:
     print(summarize([f for _, f in found], None, lo, hi, next_step=hint))
     if args.out and (lo or hi):
         os.makedirs(args.out, exist_ok=True)
-        picked = [(p, f) for p, f in found if in_range(f, lo, hi)]
-        for path, f in picked:
+        # Skip anything already there, e.g. the same photo recovered by `extract`.
+        have = {_sha256(os.path.join(args.out, n)) for n in os.listdir(args.out)
+                if os.path.isfile(os.path.join(args.out, n))}
+        copied = same = 0
+        for path, f in found:
+            if not in_range(f, lo, hi):
+                continue
+            digest = _sha256(path)
+            if digest in have:
+                same += 1
+                continue
+            have.add(digest)
             when = f.taken_dt.strftime("%Y-%m-%d_%H%M%S")
             shutil.copy2(path, os.path.join(args.out, f"{when}_{os.path.basename(path)}"))
-        print(f"Copied {len(picked)} files into {args.out}")
+            copied += 1
+        print(f"Copied {copied} files into {args.out}"
+              + (f" ({same} were already there, identical)" if same else ""))
     return 0
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()

@@ -33,8 +33,8 @@ _SOF = frozenset({0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0x
 # Segments that may legitimately come straight after SOI. Requiring one of
 # these rejects random byte runs that merely happen to start with FF D8 FF.
 _FIRST = frozenset(range(0xE0, 0xF0)) | {0xDB, 0xC4, 0xDD, 0xFE} | _SOF
-# Inside compressed data: an FF followed by anything except 00 or RST0-7.
-_NEXT_MARKER = re.compile(rb"\xff[^\x00\xd0-\xd7]")
+# Inside compressed data, FF is always followed by 00 except at a marker.
+_FF_MARKER = re.compile(rb"\xff[^\x00]")
 # A whole sector of zeros never occurs in compressed pixels; erased or never
 # written flash does look like this, so it marks where real data stops.
 _BLANK = b"\x00" * 512
@@ -50,6 +50,8 @@ class JpegInfo:
     make: str | None = None
     model: str | None = None
     taken: datetime | None = None
+    thumb_at: int | None = None  # the small whole-picture preview inside EXIF
+    thumb_size: int | None = None
     note: str = ""
 
 
@@ -69,6 +71,10 @@ def parse(reader, offset: int, max_size: int = MAX_SIZE) -> JpegInfo | None:
     pos = offset + 2
     in_pixels = False  # have we reached the compressed image data yet?
     fill = 0
+    interval = 0  # restart interval from DRI: a restart marker every N blocks
+    sampling: list[tuple[int, int]] = []
+    sequential = True
+    suspect = ""
 
     for _ in range(4096):  # real files have a few dozen segments at most
         b = reader.read(pos, 4)
@@ -85,10 +91,12 @@ def parse(reader, offset: int, max_size: int = MAX_SIZE) -> JpegInfo | None:
         if marker == 0xD9:  # EOI: the end of the image
             if not in_pixels:
                 return None
-            info.size, info.complete = pos + 2 - offset, True
+            info.size, info.complete, info.note = pos + 2 - offset, not suspect, suspect
             return info
         if marker == 0xD8:
-            return _cut(info, offset, pos, in_pixels, "another photo was written over the rest")
+            return _cut(info, offset, pos, in_pixels,
+                        "another photo starts here: the rest was stored elsewhere (fragmented) "
+                        "or overwritten; try PhotoRec brute force")
         if 0xD0 <= marker <= 0xD7 or marker == 0x01:  # markers without a length
             pos += 2
             continue
@@ -105,20 +113,33 @@ def parse(reader, offset: int, max_size: int = MAX_SIZE) -> JpegInfo | None:
                 tags = read_exif(data[6:])
                 info.make, info.model = tags.get("make"), tags.get("model")
                 info.taken = _parse_date(tags.get("taken"))
+                if "thumb" in tags:
+                    t_off, t_len = tags["thumb"]
+                    if 6 + t_off + t_len <= len(data) and data[6 + t_off:8 + t_off] == b"\xff\xd8":
+                        info.thumb_at, info.thumb_size = body + 6 + t_off, t_len
         elif marker in _SOF and length >= 7:
-            sof = reader.read(body, 5)
-            if len(sof) == 5:
+            sof = reader.read(body, length - 2)
+            if len(sof) >= 6:
                 info.height, info.width = struct.unpack(">HH", sof[1:5])
+                n = sof[5]
+                sampling = [(sof[7 + 3 * i] >> 4, sof[7 + 3 * i] & 15) for i in range(n) if 8 + 3 * i <= len(sof)]
+                sequential = marker in (0xC0, 0xC1)
+        elif marker == 0xDD and length >= 4:
+            interval = struct.unpack(">H", reader.read(body, 2))[0]
         pos += 2 + length
 
         if marker == 0xDA:  # SOS: compressed pixels follow the header
             if info.width is None:
                 return None
             in_pixels = True
-            pos, why = _skip_pixels(reader, pos, limit)
+            scan_parts = reader.read(body, 1)[0]
+            pos, why, restarts, bad = _skip_pixels(reader, pos, limit)
             if why != "marker":
                 note = "the rest of the card here is blank" if why == "blank" else "no end marker found"
-                return _cut(info, offset, pos, in_pixels, note)
+                return _cut(info, offset, pos, in_pixels, suspect or note)
+            if not suspect:
+                suspect = _check_restarts(info, interval, sampling, sequential, scan_parts,
+                                          restarts, bad, offset)
 
     return _cut(info, offset, pos, in_pixels, "too many segments")
 
@@ -131,22 +152,60 @@ def _cut(info: JpegInfo, offset: int, pos: int, in_pixels: bool, note: str) -> J
     return info
 
 
-def _skip_pixels(reader, pos: int, limit: int) -> tuple[int, str]:
-    """Return (offset, reason) for whatever ends the compressed data at ``pos``."""
+def _skip_pixels(reader, pos: int, limit: int) -> tuple[int, str, int, int | None]:
+    """Skip compressed data starting at ``pos``.
+
+    Returns (offset, reason, restart markers seen, offset of the first restart
+    marker that was out of sequence or None).
+    """
+    restarts, bad = 0, None
     while pos < limit:
         # Read one extra byte so an FF at the very end of a block is checked
         # together with the byte that follows it.
         block = reader.read(pos, min(_BLOCK, limit - pos) + 1)
         if len(block) < 2:
-            return pos + len(block), "end"
-        m = _NEXT_MARKER.search(block)
+            return pos + len(block), "end", restarts, bad
         z = block.find(_BLANK)
-        if z != -1 and (m is None or z < m.start()):
-            return pos + z, "blank"
-        if m:
-            return pos + m.start(), "marker"
+        for m in _FF_MARKER.finditer(block):
+            i = m.start()
+            if z != -1 and z < i:
+                return pos + z, "blank", restarts, bad
+            kind = block[i + 1]
+            if 0xD0 <= kind <= 0xD7:  # restart markers count RST0..RST7, then wrap
+                if bad is None and kind - 0xD0 != restarts % 8:
+                    bad = pos + i
+                restarts += 1
+                continue
+            return pos + i, "marker", restarts, bad
+        if z != -1:
+            return pos + z, "blank", restarts, bad
         pos += len(block) - 1
-    return limit, "end"
+    return limit, "end", restarts, bad
+
+
+def _check_restarts(info: JpegInfo, interval: int, sampling: list, sequential: bool,
+                    scan_parts: int, restarts: int, bad: int | None, offset: int) -> str:
+    """Restart markers are a built-in checksum of sorts; use them to spot splices.
+
+    An encoder that sets a restart interval puts RST0, RST1, ... RST7, RST0, ...
+    after every N blocks. A jump in that sequence, or the wrong total for the
+    picture's size, means some of the data here came from somewhere else.
+    """
+    if bad is not None:
+        return f"image data looks spliced with other data {bad - offset:,} bytes in"
+    if not interval:
+        return "image data contains restart markers it shouldn't: may be spliced" if restarts else ""
+    if not (sequential and sampling and scan_parts == len(sampling)):
+        return ""  # only a single interleaved scan has a simple expected count
+    if len(sampling) == 1:
+        mcus = -(-info.width // 8) * -(-info.height // 8)
+    else:
+        hmax, vmax = max(h for h, _ in sampling), max(v for _, v in sampling)
+        mcus = -(-info.width // (8 * hmax)) * -(-info.height // (8 * vmax))
+    expected = -(-mcus // interval) - 1
+    if restarts != expected:
+        return f"image data has {restarts} restart markers where {expected} were expected: part may be missing"
+    return ""
 
 
 # --- EXIF ------------------------------------------------------------------
@@ -183,6 +242,13 @@ def read_exif(tiff: bytes) -> dict:
         taken = next((d for d in dates if d), None)
         if taken:
             out["taken"] = taken
+        ifd0_at = struct.unpack_from(e + "I", tiff, 4)[0]
+        count = struct.unpack_from(e + "H", tiff, ifd0_at)[0]
+        ifd1_at = struct.unpack_from(e + "I", tiff, ifd0_at + 2 + 12 * count)[0]
+        if ifd1_at:
+            ifd1 = _ifd(tiff, ifd1_at, e)
+            if 0x0201 in ifd1 and 0x0202 in ifd1:
+                out["thumb"] = (_long(ifd1[0x0201], e), _long(ifd1[0x0202], e))
         return out
     except struct.error:
         return {}
@@ -198,6 +264,11 @@ def _ifd(tiff: bytes, off: int, e: str) -> dict:
         tag, typ, n = struct.unpack_from(e + "HHI", tiff, p)
         entries[tag] = (typ, n, tiff[p + 8:p + 12])
     return entries
+
+
+def _long(entry, e: str) -> int:
+    typ, _, raw = entry
+    return struct.unpack(e + ("H" if typ == 3 else "I"), raw[:2] if typ == 3 else raw)[0]
 
 
 def _ascii(tiff: bytes, entry, e: str) -> str | None:

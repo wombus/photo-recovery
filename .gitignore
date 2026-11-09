@@ -8,3 +8,5 @@ recup_dir*/
 photorec.log
 __pycache__/
 *.pyc
+photorec.*/
+recup.*/

@@ -54,8 +54,11 @@ class CliTests(unittest.TestCase):
         for name in os.listdir(out):
             with open(os.path.join(out, name), "rb") as fh:
                 files[name] = fh.read()
-        self.assertEqual(len(files), 3)
+        self.assertEqual(len(files), 4)
         self.assertIn(self.old, files.values())
+        # The damaged photo's embedded preview comes out whole, as its own file.
+        thumb = [d for n, d in files.items() if n.endswith("_THUMB.jpg")]
+        self.assertEqual(thumb, [synthetic_jpeg(pixels=300, seed=5, width=160, height=120, with_exif=False)])
         self.assertIn(self.video, files.values())
         partial = [d for n, d in files.items() if n.endswith("_PARTIAL.jpg")]
         self.assertEqual(len(partial), 1)
@@ -80,6 +83,10 @@ class CliTests(unittest.TestCase):
         self.assertIn("Found 1 photos and 1 videos", text)
         self.assertEqual(sorted(os.listdir(picked)),
                          ["2025-12-14_140000_f0001.jpg", "2025-12-14_140000_f0003.mp4"])
+        # Sorting a second tool's output into the same folder skips duplicates.
+        again = quiet("sort", recup, "--from", "2025-12-14", "--to", "2025-12-14", "--out", picked)
+        self.assertIn("Copied 0 files", again)
+        self.assertIn("2 were already there", again)
 
 
 if __name__ == "__main__":
